@@ -118,11 +118,11 @@ Public Sub Initialize()
     
     m_cDims = 1
     m_fFeatures = &H11 'FADF_FIXEDSIZE_AUTO
-    m_cbElements = 0&  'idk, might help prevent deallocation
-    m_cLocks = 1&
-    m_pvData = 0^
-    m_cElements = 1&
-    m_lLbound = 0&
+    m_cbElements = 0  'idk, might help prevent deallocation
+    m_cLocks = 1
+    m_pvData = 0
+    m_cElements = 1
+    m_lLbound = 0
 
     InitByProxy Initializer.Elements
     
@@ -152,7 +152,7 @@ Private Sub InitByProxy(ByRef ProxyElements() As LONG_PTR)
     
     Dim i As Long
     
-    For i = 0& To UBound(ProxyElements)
+    For i = 0& To 13&
         ProxyElements(i) = pcDims
     Next i
 End Sub
@@ -305,16 +305,20 @@ Public Property Let RefByte(ByVal Target As LongPtr, ByVal RefByte As Byte)
     m_RefByte(0&) = RefByte
 End Property
 
-Public Property Get RefLngLng(ByVal Target As LongPtr) As LongLong
-    If IsInitialized Then Else Initialize
-    m_pvData = Target
-    RefLngLng = m_RefLngLng(0&)
-End Property
-Public Property Let RefLngLng(ByVal Target As LongPtr, ByVal RefLngLng As LongLong)
-    If IsInitialized Then Else Initialize
-    m_pvData = Target
-    m_RefLngLng(0&) = RefLngLng
-End Property
+    Public Property Get RefLngLng(ByVal Target As LongPtr) As LongLong
+        If IsInitialized Then Else Initialize
+        m_pvData = Target
+        RefLngLng = m_RefLngLng(0&)
+    End Property
+#If Win64 = 0 Then
+    Public Property Let RefLngLng(ByVal Target As LongPtr, ByRef RefLngLng As LongLong)
+#Else
+    Public Property Let RefLngLng(ByVal Target As LongPtr, ByVal RefLngLng As LongLong)
+#End If
+        If IsInitialized Then Else Initialize
+        m_pvData = Target
+        m_RefLngLng(0&) = RefLngLng
+    End Property
 
 Public Property Get RefLngPtr(ByVal Target As LongPtr) As LongPtr
     If IsInitialized Then Else Initialize
