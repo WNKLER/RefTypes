@@ -73,7 +73,7 @@ End Type                                '// Although, be aware that this structu
 Private Type MemoryProxy                                           '// The declared type of `Elements()` can be any of
     Elements(LELEMENTS_LBOUND To LELEMENTS_UBOUND) As ProxyElement '// the following: Enum, UDT, or Alias (typedef)
 End Type                                                           '// NOTE: A ProxyElement's Type must be smaller
-                                                                   '// than the Type of the Element it represents.
+                                                                   '// than the size of the Element it represents.
 '******************************************************************'
 ' When passed to `InitByProxy()`, the `Initializer.Elements` array '
 ' provides access to fourteen, pointer-sized elements immmediately '
