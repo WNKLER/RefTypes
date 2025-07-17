@@ -42,10 +42,10 @@ Option Explicit
      Public Enum LongPtr:  [_]: End Enum '// Must be Public for Enum-typed Public Property
 #End If
 
-Private Const LPTR_SIZE As Long = 4 + (Win64 * 4)                                 ' _
-********************************************************************************* ' _
-This section just sets up the array bounds according to the four `UserDefined`    ' _
-parameters. If you already know what bounds you need, you can just hardcode them. ' _
+Private Const LPTR_SIZE As Long = 4 + (Win64 * 4)
+'*********************************************************************************'
+' This section just sets up the array bounds according to the four `UserDefined`  '
+' parameters. If you already know the correct bounds, you can just hardcode them. '
 
 Private Const LPROXY_SIZE      As Long = 1         '// UserDefined (should be an integer divisor of <PTR_SIZE>)
 Private Const LELEMENT_SIZE    As Long = LPTR_SIZE '// UserDefined (usually should be <PTR_SIZE>)
@@ -63,8 +63,8 @@ End Enum
 Private Const LELEMENTS_LBOUND As Long = [_ELEMENT_SIZE_OF_PROXY] * -1
 Private Const LELEMENTS_UBOUND As Long = [_ELEMENT_SIZE_OF_BLOCK] + (LELEMENTS_LBOUND < 0)
 Private Const LBLOCK_OFFSET    As Long = [_ELEMENT_SIZE_OF_PROXY] * LELEMENT_SIZE '// Relative to VarPtr(<MemoryProxyVariable>)
-Private Const LBLOCK_SIZE      As Long = [_ELEMENT_SIZE_OF_BLOCK] * LELEMENT_SIZE ' _
-********************************************************************************* '
+Private Const LBLOCK_SIZE      As Long = [_ELEMENT_SIZE_OF_BLOCK] * LELEMENT_SIZE '
+'*********************************************************************************'
 
 Private Type ProxyElement               '// This could be anything. I have it as an array of bytes only for the
     ProxyAlloc(LPROXY_SIZE - 1) As Byte '// convenience of binding its size to a constant, and for maximum granularity.
@@ -73,14 +73,14 @@ End Type                                '// Although, be aware that this structu
 Private Type MemoryProxy                                           '// The declared type of `Elements()` can be any of
     Elements(LELEMENTS_LBOUND To LELEMENTS_UBOUND) As ProxyElement '// the following: Enum, UDT, or Alias (typedef)
 End Type                                                           '// NOTE: A ProxyElement's Type must be smaller
-                                                                   '// than the Type of the Element it represents. ' _
-****************************************************************** ' _
-When passed to `InitByProxy()`, the `Initializer.Elements` array   ' _
-provides access to fourteen, pointer-sized elements immmediately   ' _
-following the `Initializer` variable's memory allocation.          ' _
+                                                                   '// than the Type of the Element it represents.
+'******************************************************************'
+' When passed to `InitByProxy()`, the `Initializer.Elements` array '
+' provides access to fourteen, pointer-sized elements immmediately '
+' following the `Initializer` variable's memory allocation.        '
 
-Private Initializer   As MemoryProxy                               ' _
-<Memory proxied by `Initializer`>
+Private Initializer   As MemoryProxy
+' <Memory proxied by `Initializer`>
 Private m_RefInt()    As Integer
 Private m_RefLng()    As Long
 Private m_RefSng()    As Single
@@ -95,13 +95,13 @@ Private m_RefUnk()    As IUnknown
 'Private m_RefDec()    As Variant
 Private m_RefByte()   As Byte
 Private m_RefLngLng() As LongLong
-Private m_RefLngPtr() As LongPtr                                   ' _
-<End of proxied memory block>                                      ' _
-****************************************************************** '
-                                                                                                ' _
-*********************************************************************************************** ' _
-Inspired by Cristian Buse's `VBA-MemoryTools` <https://github.com/cristianbuse/VBA-MemoryTools> ' _
-Arbitrary memory access is achieved via a carefully constructed SAFEARRAY `Descriptor` struct.  ' _
+Private m_RefLngPtr() As LongPtr
+' <End of proxied memory block>
+'*******************************************************************'
+                                                                                               
+'*************************************************************************************************'
+' Inspired by Cristian Buse's `VBA-MemoryTools` <https://github.com/cristianbuse/VBA-MemoryTools> '
+' Arbitrary memory access is achieved via a carefully constructed SAFEARRAY `Descriptor` struct.  '
 
 Private m_cDims       As Integer
 Private m_fFeatures   As Integer
@@ -110,7 +110,7 @@ Private m_cLocks      As Long
 Private m_pvData      As LongPtr
 Private m_cElements   As Long
 Private m_lLbound     As Long ' _
-*********************************************************************************************** '
+'*************************************************************************************************'
 Private IsInitialized As Boolean
 
 Public Sub Initialize()
@@ -127,25 +127,25 @@ Public Sub Initialize()
     InitByProxy Initializer.Elements
     
     IsInitialized = True
-End Sub                                                                         ' _
-******************************************************************************* ' _
-This is only possible because the compiler does not (or cannot?) discriminate   ' _
-between <Non-Intrinsic Array Argument> types passed to <Array Parameters> whose ' _
-<Declared Type> is an <Enum> or an <Alias> (a non-struct typdef).               ' _
-Such Array Parameters will accept any <UDT/Enum/Alias>-typed array argument.    ' _
-                                                                                ' _
-Another key behavior is that (except for cDims, pvData, and Bounds) the array   ' _
-descriptor has no effect on indexing/reading/writing the array elements within  ' _
-the scope of the receiving procedure; indexing/reading/writing align with the   ' _
-declared type of the Array Parameter. (this behavior is not critical, but it    ' _
-greatly simplifies the implementation) NOTE: You cannot pass an element ByRef   ' _
-from inside the procedure. Doing so passes the address of its proxy.            ' _
-                                                                                ' _
-Similarly, Array Parameters whose <Declared Type> is <Fixed-Length-String> will ' _
-accept ANY <Fixed-Length-String> array argument, regardless of Declared Length. ' _
-However, since Fixed-Length-Strings have no alignment, the starting position of ' _
-an element and the starting position of its proxy will always be the same.      ' _
-******************************************************************************* '
+End Sub
+'*********************************************************************************'
+' This is only possible because the compiler does not (or cannot?) discriminate   '
+' between <Non-Intrinsic Array Argument> types passed to <Array Parameters> whose '
+' <Declared Type> is an <Enum> or an <Alias> (a non-struct typdef).               '
+' Such Array Parameters will accept any <UDT/Enum/Alias>-typed array argument.    '
+'                                                                                 '
+' Another key behavior is that (except for cDims, pvData, and Bounds) the array   '
+' descriptor has no effect on indexing/reading/writing the array elements within  '
+' the scope of the receiving procedure; indexing/reading/writing align with the   '
+' declared type of the Array Parameter. (this behavior is not critical, but it    '
+' greatly simplifies the implementation) NOTE: You cannot pass an element ByRef   '
+' from inside the procedure. Doing so passes the address of its proxy.            '
+'                                                                                 '
+' Similarly, Array Parameters whose <Declared Type> is <Fixed-Length-String> will '
+' accept ANY <Fixed-Length-String> array argument, regardless of Declared Length. '
+' However, since Fixed-Length-Strings have no alignment, the starting position of '
+' an element and the starting position of its proxy will always be the same.      '
+'*********************************************************************************'
 Private Sub InitByProxy(ByRef ProxyElements() As LONG_PTR)
     Dim pcDims As LongPtr
     pcDims = VarPtr(m_cDims)
