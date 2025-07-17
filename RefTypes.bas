@@ -109,7 +109,7 @@ Private m_cbElements  As Long
 Private m_cLocks      As Long
 Private m_pvData      As LongPtr
 Private m_cElements   As Long
-Private m_lLbound     As Long ' _
+Private m_lLbound     As Long
 '*************************************************************************************************'
 Private IsInitialized As Boolean
 
@@ -118,7 +118,7 @@ Public Sub Initialize()
     
     m_cDims = 1
     m_fFeatures = &H11 'FADF_FIXEDSIZE_AUTO
-    m_cbElements = 0  'idk, might help prevent deallocation
+    m_cbElements = 0   'idk, might help prevent deallocation
     m_cLocks = 1
     m_pvData = 0
     m_cElements = 1
