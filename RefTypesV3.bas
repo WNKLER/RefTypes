@@ -1,4 +1,4 @@
-Attribute VB_Name = "Module20"
+Attribute VB_Name = "RefTypesV3"
 'MIT License
 'https://github.com/WNKLER/RefTypes
 Option Private Module
