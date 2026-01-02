@@ -1,273 +1,308 @@
 Attribute VB_Name = "RefTypes"
+'MIT License
+'https://github.com/WNKLER/RefTypes
 Option Private Module
 Option Explicit
 
+ #If VBA7 <> 1 Then
+    Private Enum LONG_PTR: [_LONG_PTR]: End Enum
+     Public Enum LongPtr:   [_LongPtr]: End Enum '// Must be Public for Enum-typed Public Property
+    Private Const NullPtr = [_LongPtr]
+ #Else
+    Private Const NullPtr As LongPtr = 0
+ #End If
+    
 Private Enum Context
-#If Win64 Then
-    [_]   '// 0 on x64; undefined on x86.
-#End If
-    Win64 '// 0 when [_] is undefined; otherwise, [_] + 1.
-    PtrSize = 4 + (4 * Win64)
-    VarSize = 8 + (2 * PtrSize)
+ #If Win64 = 1 Then
+    [_Win32] '// 0 on x64; undefined on x32.
+ #End If
+    [_Win64] '// 0 when [_Win32] is undefined; otherwise, [_Win32] + 1.
+    [_PtrSize] = 4& + ([_Win64] * 4&)
 End Enum
 
-#If VBA7 = 0 Then
-    Private Enum LONG_PTR: [_]: End Enum
-     Public Enum LongPtr:  [_]: End Enum '// Must be Public for Enum-typed Public Property
-#End If
+Private Const Win64 As Integer = [_Win64]
+Private Const cLongPtr As Long = [_PtrSize]
+Private Const wHalfPtr As Long = cLongPtr \ 4&
+
+'// Implicit typing allows for (effectively) LongPtr-typed constants
+Private Const oLongPtr = NullPtr + cLongPtr
+Private Const oNativeCallBack = (NullPtr + 22) + (Win64 * 33)
+Private Const oProcDscInfoPtr = (Win64 * oLongPtr) - (Not -Win64)
+Private Const o8h = NullPtr + 8
 
 Private Type HalfPtr
-    HalfPtr(-Win64 To 0) As Integer
+    Bytes As String * wHalfPtr
 End Type
 
-Private Type Initializer
-    Initializer(-1 To 0) As HalfPtr
+Private Type StackMemory
+    Bytes(-1& To 0&) As HalfPtr
 End Type
 
-Private Type Descriptor
-    cDims         As Integer
-    fFeatures     As Integer
-    cbElements    As Long
-    IsInitialized As Boolean
-    pvData        As LongPtr
-    cElements     As Long
-    lLbound       As Long
+Private Type RebindArgs
+    This As LongPtr: pCalled As LongPtr: pActual As LongPtr
 End Type
 
-'Private Type Vector          '// Declare Static Fields individually. This avoids defining
-'    Element()  As Any        '// a separate Vector UDT for each `Element()` Type.
-'    Descriptor As Descriptor
-'End Type _
+'// NOTE: This `redbinding` technique only works for VBA and p-code executables.
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Internals] ////////////////////////////////////////////////////////////////////////////////
 
-Private Sub InitInitializer(ByRef Initializer() As LONG_PTR)
-    Const First As Long = -1
-    Const Last  As Long = -0
-    
-    Initializer(Last) = VarPtr(Initializer(First)) + (2 * PtrSize)
+Private Enum ProcIndex                '// Provides identifiers for ImportTable indices
+: [_GetP]:    [_PutP]:    [_MovP]     '// by matching member declaration-order to
+: [_Get1]:    [_Put1]:    [_Mov1]     '// `LayoutImportTable()` return-order.
+: [_Get2]:    [_Put2]:    [_Mov2]     '//
+: [_Get4]:    [_Put4]:    [_Mov4]     '// Syntactic Sugar. Could just use literals.
+: [_Get8]:    [_Put8]:    [_Mov8]
+
+: [_GetPtr]:  [_LetPtr]:  [_CopyPtr]
+: [_GetByte]: [_LetByte]: [_Copy1]
+: [_GetInt]:  [_LetInt]:  [_Copy2]
+: [_GetLng]:  [_LetLng]:  [_Copy4]
+: [_GetCur]:  [_LetCur]:  [_Copy8]
+End Enum
+
+Private RebindArgs As RebindArgs
+
+'// Never intended to be run.
+Private Sub LayoutImportTable(ByRef A As LongPtr, ByRef AA As LongPtr)
+    Select Case True                            '// The presence of a procedure call anywhere in a Module's
+        Case True, False                        '// code adds that procedure to the Module's ImportTable.
+        Case Else: Exit Sub                     '// ImportTable entries are added in return-order (roughly).
+            Call GetP:   Call PutP:  Call MovP  '//
+            Call Get1:   Call Put1:  Call Mov1  '// The only reason we need the ImportTable at all is because
+            Call Get2:   Call Put2:  Call Mov2  '// we can't use `AddressOf` on Property Let/Set procedures.
+            Call Get4:   Call Put4:  Call Mov4  '// Sacrificing the luxury of Property-based accessors
+            Call Get8:   Call Put8:  Call Mov8  '// would greatly simplify this project.
+                                                
+            RefPtr(AA) = RefPtr(AA): Call CopyPtr(AA, A)
+            RefByte(A) = RefByte(A): Call Copy1(A, A)
+            RefInt(AA) = RefInt(AA): Call Copy2(AA, A)
+            RefLng(AA) = RefLng(AA): Call Copy4(AA, A)
+            RefCur(AA) = RefCur(AA): Call Copy8(AA, A)
+    End Select
 End Sub
 
-Private Sub Init(ByRef Descriptor As Descriptor)
-    Const FADF_AUTO      As Integer = &H1
-    Const FADF_FIXEDSIZE As Integer = &H10
-    
-    Static This            As Initializer '// Proxy for `Init_Element()`
-    Static Init_Element()  As LongPtr     '// Static Init As Vector
-    Static Init_Descriptor As Descriptor
-    
-    With Init_Descriptor
-        If .IsInitialized = False Then
-            InitInitializer This.Initializer '// Point `Init_Element()` to `Init_Descriptor`
-            .lLbound = 0
-            .cElements = 1
-            .fFeatures = FADF_AUTO Or FADF_FIXEDSIZE
-            .cDims = 1
-            .IsInitialized = True
-        End If
+'// [Helpers] //////////////////////////////////
+Private Property Let SetBind(ByVal Index_Called As ProcIndex, ByVal Index_Actual As ProcIndex)
+    CopyPtr GetBind(Index_Called), GetBind(Index_Actual)
+End Property
+
+Private Function GetBind(ByVal Index As ProcIndex) As LongPtr
+    GetBind = RefPtr(ImportTable + oLongPtr * Index) + oProcDscInfoPtr
+End Function
+
+Private Function ImportTable() As LongPtr
+  Const oImportTable = oLongPtr * (13 - Win64)
+    ImportTable = RefPtr(EpiModule + oImportTable)
+End Function
+
+Private Function EpiModule() As LongPtr
+    EpiModule = RefPtr(RefPtr(UnWrapCallBack(AddressOf UnWrapCallBack)))
+End Function
+
+Private Function UnWrapCallBack(ByVal AddressOf_Proc As LongPtr) As LongPtr
+    AddressOf_Proc = RefPtr(AddressOf_Proc + oNativeCallBack)
+ #If Win64 Then
+    AddressOf_Proc = RefPtr(AddressOf_Proc - oLongPtr)
+ #End If
+    UnWrapCallBack = AddressOf_Proc + oProcDscInfoPtr
+End Function
+
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Init] (Checkless. Runs only once, automatically.) /////////////////////////////////////////
+
+Private Sub Rebind_GetPtr()
+    Rebind NullPtr, AddressOf RefPtr, AddressOf GetP
+End Sub
+Private Sub Rebind_CopyPtr()
+    Rebind NullPtr, AddressOf CopyPtr, AddressOf MovP
+End Sub
+
+Private Sub Rebind(Optional ByVal Args As LongPtr, Optional ByRef Called As LongPtr, Optional ByRef Actual As LongPtr)
+    With RebindArgs             '// HighPtr(Here.Bytes)
+        Dim Here As StackMemory '// With-block Accessor
+        HighPtr(Here.Bytes) = VarPtr(Args) '// Set With-block address to VarPtr(Args)
         
-        .pvData = VarPtr(Descriptor) - PtrSize
-        Init_Element(0) = .pvData + PtrSize
+        .pCalled = Called + oNativeCallBack
+        .pActual = Actual + oNativeCallBack
+     #If Win64 Then
+        .pCalled = Called - oLongPtr
+        .pActual = Actual - oLongPtr
+     #End If
+        .pCalled = Called + oProcDscInfoPtr
+        .pActual = Actual + oProcDscInfoPtr
     End With
     
-    With Descriptor
-        .lLbound = 0
-        .cElements = 1
-        .fFeatures = FADF_AUTO Or FADF_FIXEDSIZE
-        .cDims = 1
-        .IsInitialized = True
-    End With
+    Called = Actual
 End Sub
 
-Public Property Get RefInt(ByVal Target As LongPtr) As Integer
-    Static Vector_Element() As Integer, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefInt = Vector_Element(0&)
-End Property
-Public Property Let RefInt(ByVal Target As LongPtr, ByVal RefInt As Integer)
-    Static Vector_Element() As Integer, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefInt
+Private Property Let HighPtr(ByRef HalfPtr() As LONG_PTR, ByVal Address As LongPtr)
+    HalfPtr(0&) = Address
 End Property
 
-Public Property Get RefLng(ByVal Target As LongPtr) As Long
-    Static Vector_Element() As Long, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefLng = Vector_Element(0&)
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Internal Accessors] (The actual code that runs when an exposed accessor is called.) ///////
+
+'// [Pointer] ////////////////////////////////////
+Private Function GetP(Optional ByRef Target As LongPtr) As LongPtr
+    GetP = Target
+End Function
+     Private Sub PutP(Optional ByRef Target As LongPtr, Optional ByVal Source As LongPtr)
+    Target = Source
+End Sub
+     Private Sub MovP(Optional ByRef Target As LongPtr, Optional ByRef Source As LongPtr)
+    Target = Source
+End Sub
+
+'// [One Byte] /////////////////////////////////
+Private Function Get1(Optional ByRef Target As Byte) As Byte
+    Get1 = Target
+End Function
+     Private Sub Put1(Optional ByRef Target As Byte, Optional ByVal Source As Byte)
+    Target = Source
+End Sub
+     Private Sub Mov1(Optional ByRef Target As Byte, Optional ByRef Source As Byte)
+    Target = Source
+End Sub
+
+'// [Two Bytes] ////////////////////////////////
+Private Function Get2(Optional ByRef Target As Integer) As Integer
+    Get2 = Target
+End Function
+     Private Sub Put2(Optional ByRef Target As Integer, Optional ByVal Source As Integer)
+    Target = Source
+End Sub
+     Private Sub Mov2(Optional ByRef Target As Integer, Optional ByRef Source As Integer)
+    Target = Source
+End Sub
+
+'// [Four Bytes] ///////////////////////////////
+Private Function Get4(Optional ByRef Target As Long) As Long
+    Get4 = Target
+End Function
+     Private Sub Put4(Optional ByRef Target As Long, Optional ByVal Source As Long)
+    Target = Source
+End Sub
+     Private Sub Mov4(Optional ByRef Target As Long, Optional ByRef Source As Long)
+    Target = Source
+End Sub
+
+'// [Eight Bytes] //////////////////////////////
+Private Function Get8(Optional ByRef Target As Currency) As Currency
+    Get8 = Target
+End Function
+     Private Sub Put8(Optional ByRef Target As Currency, Optional ByVal Source As Currency)
+    Target = Source
+End Sub
+     Private Sub Mov8(Optional ByRef Target As Currency, Optional ByRef Source As Currency)
+    Target = Source
+End Sub
+
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Exposed Accessors] ////////////////////////////////////////////////////////////////////////
+'// --- These only run only once. //////////////////////////////////////////////////////////////
+'// ------ (On first-call): ////////////////////////////////////////////////////////////////////
+'// ----------- 1. Rebind Self /////////////////////////////////////////////////////////////////
+'// ----------- 2. Invoke Self as-called ///////////////////////////////////////////////////////
+'// ---------- [3. Return Result] //////////////////////////////////////////////////////////////
+
+'// [Pointer] //////////////////////////////////
+Public Property Get RefPtr(ByVal Target As LongPtr) As LongPtr
+    Rebind_GetPtr
+    RefPtr = RefPtr(Target)
 End Property
-Public Property Let RefLng(ByVal Target As LongPtr, ByVal RefLng As Long)
-    Static Vector_Element() As Long, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefLng
+Public Property Let RefPtr(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_LetPtr]) = [_PutP]
+    RefPtr(Target) = Source
 End Property
 
-Public Property Get RefSng(ByVal Target As LongPtr) As Single
-    Static Vector_Element() As Single, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefSng = Vector_Element(0&)
-End Property
-Public Property Let RefSng(ByVal Target As LongPtr, ByVal RefSng As Single)
-    Static Vector_Element() As Single, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefSng
-End Property
+Public Sub CopyPtr(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    Rebind_CopyPtr
+    CopyPtr Target, Source
+End Sub
 
-Public Property Get RefDbl(ByVal Target As LongPtr) As Double
-    Static Vector_Element() As Double, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefDbl = Vector_Element(0&)
-End Property
-Public Property Let RefDbl(ByVal Target As LongPtr, ByVal RefDbl As Double)
-    Static Vector_Element() As Double, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefDbl
-End Property
-
-Public Property Get RefCur(ByVal Target As LongPtr) As Currency
-    Static Vector_Element() As Currency, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefCur = Vector_Element(0&)
-End Property
-Public Property Let RefCur(ByVal Target As LongPtr, ByVal RefCur As Currency)
-    Static Vector_Element() As Currency, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefCur
-End Property
-
-Public Property Get RefDate(ByVal Target As LongPtr) As Date
-    Static Vector_Element() As Date, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefDate = Vector_Element(0&)
-End Property
-Public Property Let RefDate(ByVal Target As LongPtr, ByVal RefDate As Date)
-    Static Vector_Element() As Date, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefDate
-End Property
-
-Public Property Get RefStr(ByVal Target As LongPtr) As String
-    Static Vector_Element() As String, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    RefStr = Vector_Element(0&)
-End Property
-Public Property Let RefStr(ByVal Target As LongPtr, ByRef RefStr As String)
-    Static Vector_Element() As String, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefStr
-End Property
-
-Public Property Get RefObj(ByVal Target As LongPtr) As Object
-    Static Vector_Element() As Object, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    Set RefObj = Vector_Element(0&)
-End Property
-Public Property Set RefObj(ByVal Target As LongPtr, ByVal RefObj As Object)
-    Static Vector_Element() As Object, Vector_Descriptor As Descriptor      '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    Set Vector_Element(0&) = RefObj
-End Property
-
-Public Property Get RefBool(ByVal Target As LongPtr) As Boolean
-    Static Vector_Element() As Boolean, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefBool = Vector_Element(0&)
-End Property
-Public Property Let RefBool(ByVal Target As LongPtr, ByVal RefBool As Boolean)
-    Static Vector_Element() As Boolean, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefBool
-End Property
-
-Public Property Get RefVar(ByVal Target As LongPtr) As Variant
-    Static Vector_Element() As Variant, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor: Vector_Descriptor.cbElements = VarSize
-    Vector_Descriptor.pvData = Target
-    If TypeOf Vector_Element(0&) Is IUnknown Then
-        Set RefVar = Vector_Element(0&)
-    Else
-        RefVar = Vector_Element(0&)
-    End If
-End Property
-Public Property Let RefVar(ByVal Target As LongPtr, ByRef RefVar As Variant)
-    Static Vector_Element() As Variant, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor: Vector_Descriptor.cbElements = VarSize
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefVar
-End Property
-Public Property Set RefVar(ByVal Target As LongPtr, ByRef RefVar As Variant)
-    Static Vector_Element() As Variant, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor: Vector_Descriptor.cbElements = VarSize
-    Vector_Descriptor.pvData = Target
-    Set Vector_Element(0&) = RefVar
-End Property
-
-Public Property Get RefUnk(ByVal Target As LongPtr) As IUnknown
-    Static Vector_Element() As IUnknown, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    Set RefUnk = Vector_Element(0&)
-End Property
-Public Property Set RefUnk(ByVal Target As LongPtr, ByVal RefUnk As IUnknown)
-    Static Vector_Element() As IUnknown, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = PtrSize
-    Vector_Descriptor.pvData = Target
-    Set Vector_Element(0&) = RefUnk
-End Property
-
+'// [Byte] /////////////////////////////////////
 Public Property Get RefByte(ByVal Target As LongPtr) As Byte
-    Static Vector_Element() As Byte, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefByte = Vector_Element(0&)
+    SetBind([_GetByte]) = [_Get1]
+    RefByte = RefByte(Target)
 End Property
-Public Property Let RefByte(ByVal Target As LongPtr, ByVal RefByte As Byte)
-    Static Vector_Element() As Byte, Vector_Descriptor As Descriptor        '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefByte
+Public Property Let RefByte(ByVal Target As LongPtr, ByVal Source As Byte)
+    SetBind([_LetByte]) = [_Put1]
+    RefByte(Target) = Source
 End Property
 
-#If Win64 = 1 Then
-    Public Property Get RefLngLng(ByVal Target As LongPtr) As LongLong
-        Static Vector_Element() As LongLong, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-        If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-        Vector_Descriptor.pvData = Target
-        RefLngLng = Vector_Element(0&)
-    End Property
-    Public Property Let RefLngLng(ByVal Target As LongPtr, ByVal RefLngLng As LongLong)
-        Static Vector_Element() As LongLong, Vector_Descriptor As Descriptor    '// Static Vector As Vector
-        If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-        Vector_Descriptor.pvData = Target
-        Vector_Element(0&) = RefLngLng
-    End Property
-#End If
+Public Sub Copy1(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_Copy1]) = [_Mov1]
+    Copy1 Target, Source
+End Sub
 
-Public Property Get RefLngPtr(ByVal Target As LongPtr) As LongPtr
-    Static Vector_Element() As LongPtr, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    RefLngPtr = Vector_Element(0&)
+'// [Integer] //////////////////////////////////
+Public Property Get RefInt(ByVal Target As LongPtr) As Integer
+    SetBind([_GetInt]) = [_Get2]
+    RefInt = RefInt(Target)
 End Property
-Public Property Let RefLngPtr(ByVal Target As LongPtr, ByVal RefLngPtr As LongPtr)
-    Static Vector_Element() As LongPtr, Vector_Descriptor As Descriptor     '// Static Vector As Vector
-    If Vector_Descriptor.IsInitialized Then Else Init Vector_Descriptor     ': Vector_Descriptor.cbElements = LenB(Vector_Element(0&))
-    Vector_Descriptor.pvData = Target
-    Vector_Element(0&) = RefLngPtr
+Public Property Let RefInt(ByVal Target As LongPtr, ByVal Source As Integer)
+    SetBind([_LetInt]) = [_Put2]
+    RefInt(Target) = Source
 End Property
 
+Public Sub Copy2(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_Copy2]) = [_Mov2]
+    Copy2 Target, Source
+End Sub
+
+'// [Long] /////////////////////////////////////
+Public Property Get RefLng(ByVal Target As LongPtr) As Long
+    SetBind([_GetLng]) = [_Get4]
+    RefLng = RefLng(Target)
+End Property
+Public Property Let RefLng(ByVal Target As LongPtr, ByVal Source As Long)
+    SetBind([_LetLng]) = [_Put4]
+    RefLng(Target) = Source
+End Property
+
+Public Sub Copy4(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_Copy4]) = [_Mov4]
+    Copy4 Target, Source
+End Sub
+
+'// [Currency] /////////////////////////////////
+Public Property Get RefCur(ByVal Target As LongPtr) As Currency
+    SetBind([_GetCur]) = [_Get8]
+    RefCur = RefCur(Target)
+End Property
+Public Property Let RefCur(ByVal Target As LongPtr, ByVal Source As Currency)
+    SetBind([_LetCur]) = [_Put8]
+    RefCur(Target) = Source
+End Property
+
+Public Sub Copy8(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_Copy8]) = [_Mov8]
+    Copy8 Target, Source
+End Sub
+
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Exposed Utilities] (Assorted) /////////////////////////////////////////////////////////////
+
+'// [tagVARIANT._Val] //////////////////////////
+Public Property Get VarVal(ByRef VarVar As Variant) As LongPtr
+    VarVal = RefPtr(VarPtr(VarVar) + o8h)
+End Property
+Public Property Let VarVal(ByRef VarVar As Variant, ByVal Val As LongPtr)
+    RefPtr(VarPtr(VarVar) + o8h) = Val
+End Property
+
+'// `AddressOf` operator only accepts Sub/Function/Property_Get identifiers.
+'//  Property_Let/Property_Set (propput[ref]) identifier operands are invalid.
+Public Function RebindNonPut(ByVal AddressOf_Called As LongPtr, ByVal AddressOf_Actual As LongPtr) As LongPtr
+    AddressOf_Called = RefPtr(AddressOf_Called + oNativeCallBack)
+    AddressOf_Actual = RefPtr(AddressOf_Actual + oNativeCallBack)
+ #If Win64 Then
+    AddressOf_Called = RefPtr(AddressOf_Called - oLongPtr)
+    AddressOf_Actual = RefPtr(AddressOf_Actual - oLongPtr)
+ #End If
+    AddressOf_Called = AddressOf_Called + oProcDscInfoPtr
+    AddressOf_Actual = AddressOf_Actual + oProcDscInfoPtr
+    
+    RebindNonPut = RefPtr(AddressOf_Called)    '// Returns the overwritten address
+    CopyPtr AddressOf_Called, AddressOf_Actual
+End Function
