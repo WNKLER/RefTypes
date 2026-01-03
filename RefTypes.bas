@@ -42,6 +42,13 @@ Private Type RebindArgs
     This As LongPtr: pCalled As LongPtr: pActual As LongPtr
 End Type
 
+Private Type tagVARIANT
+    vt    As Integer
+    wReserved1_2_3 As String * 3&
+    val   As LongPtr
+    valEx As LongPtr
+End Type
+
 '// NOTE: This `redbinding` technique only works for VBA and p-code executables.
 '///////////////////////////////////////////////////////////////////////////////////////////////
 '// [Internals] ////////////////////////////////////////////////////////////////////////////////
@@ -52,32 +59,45 @@ Private Enum ProcIndex                '// Provides identifiers for ImportTable i
 : [_Get2]:    [_Put2]:    [_Mov2]     '//
 : [_Get4]:    [_Put4]:    [_Mov4]     '// Syntactic Sugar. Could just use literals.
 : [_Get8]:    [_Put8]:    [_Mov8]
+:             [_SetV]:    [_MovV]
+: [_GetT]:    [_PutT]:    [_MovT]
 
 : [_GetPtr]:  [_LetPtr]:  [_CopyPtr]
 : [_GetByte]: [_LetByte]: [_Copy1]
 : [_GetInt]:  [_LetInt]:  [_Copy2]
 : [_GetLng]:  [_LetLng]:  [_Copy4]
 : [_GetCur]:  [_LetCur]:  [_Copy8]
+: [_GetVar]:  [_LetVar]:  [_CopyVar]: [_SetVar]
+
+: [_GetVT]:   [_LetVT]:   [_CopyVT]
+: [_GetVal]:  [_LetVal]:  [_CopyVal]
 End Enum
 
 Private RebindArgs As RebindArgs
 
 '// Never intended to be run.
-Private Sub LayoutImportTable(ByRef A As LongPtr, ByRef AA As LongPtr)
-    Select Case True                            '// The presence of a procedure call anywhere in a Module's
-        Case True, False                        '// code adds that procedure to the Module's ImportTable.
-        Case Else: Exit Sub                     '// ImportTable entries are added in return-order (roughly).
-            Call GetP:   Call PutP:  Call MovP  '//
-            Call Get1:   Call Put1:  Call Mov1  '// The only reason we need the ImportTable at all is because
-            Call Get2:   Call Put2:  Call Mov2  '// we can't use `AddressOf` on Property Let/Set procedures.
-            Call Get4:   Call Put4:  Call Mov4  '// Sacrificing the luxury of Property-based accessors
-            Call Get8:   Call Put8:  Call Mov8  '// would greatly simplify this project.
-                                                
-            RefPtr(AA) = RefPtr(AA): Call CopyPtr(AA, A)
-            RefByte(A) = RefByte(A): Call Copy1(A, A)
-            RefInt(AA) = RefInt(AA): Call Copy2(AA, A)
-            RefLng(AA) = RefLng(AA): Call Copy4(AA, A)
-            RefCur(AA) = RefCur(AA): Call Copy8(AA, A)
+Private Sub LayoutImportTable(V, VV, VVV, A As LongPtr, AA As LongPtr, AAA As LongPtr, T As tagVARIANT)
+    Select Case True                                    '// The presence of a procedure call anywhere in a Module's
+        Case True, False                                '// code adds that procedure to the Module's ImportTable.
+        Case Else: Exit Sub                             '// ImportTable entries are added in return-order (roughly).
+            Call GetP:    Call PutP:    Call MovP       '//
+            Call Get1:    Call Put1:    Call Mov1       '// The only reason we need the ImportTable at all is because
+            Call Get2:    Call Put2:    Call Mov2       '// we can't use `AddressOf` on Property Let/Set procedures.
+            Call Get4:    Call Put4:    Call Mov4       '// Sacrificing the luxury of Property-based accessors
+            Call Get8:    Call Put8:    Call Mov8       '// would greatly simplify this project.
+                          Call SetV:    Call MovV(T, T)
+            Call GetT(T): Call PutT(T): Call MovT(T, T)
+            
+            RefPtr(AA) = RefPtr(AA): Call CopyPtr(A, A)
+            RefByte(A) = RefByte(A): Call Copy1(AAA, A)
+            RefInt(AA) = RefInt(AA): Call Copy2(AAA, A)
+            RefLng(AA) = RefLng(AA): Call Copy4(AAA, A)
+            RefCur(AA) = RefCur(AA): Call Copy8(AAA, A)
+            RefVar(AA) = RefVar(AA): Call CopyVar(A, A)
+            Set RefVar(A) = Nothing
+            
+            VarVT(VVV) = VarVT(VVV): Call CopyVT(VV, V)
+            VarVal(VV) = VarVal(VV): Call CopyVal(V, V)
     End Select
 End Sub
 
@@ -197,6 +217,25 @@ End Sub
     Target = Source
 End Sub
 
+'// [tagVARIANT] ///////////////////////////////
+Private Sub SetV(Optional ByRef Target As Variant, Optional ByRef Source As Variant)
+    Set Target = Source
+End Sub
+Private Sub MovV(ByRef Target As tagVARIANT, ByRef Source As tagVARIANT)
+    Target = Source
+End Sub
+
+'// [tagVARIANT.val] ///////////////////////////
+Private Function GetT(ByRef Target As tagVARIANT) As LongPtr
+    GetT = Target.val
+End Function
+     Private Sub PutT(ByRef Target As tagVARIANT, Optional ByVal Source As LongPtr)
+    Target.val = Source
+End Sub
+     Private Sub MovT(ByRef Target As tagVARIANT, ByRef Source As tagVARIANT)
+    Target.val = Source.val
+End Sub
+
 '///////////////////////////////////////////////////////////////////////////////////////////////
 '// [Exposed Accessors] ////////////////////////////////////////////////////////////////////////
 '// --- These only run only once. //////////////////////////////////////////////////////////////
@@ -280,16 +319,57 @@ Public Sub Copy8(ByVal Target As LongPtr, ByVal Source As LongPtr)
     Copy8 Target, Source
 End Sub
 
+'// [Variant] //////////////////////////////////
+Public Property Get RefVar(ByVal Target As LongPtr) As Variant
+    SetBind([_GetVar]) = [_MovV]
+    RefVar = RefVar(Target)
+End Property
+Public Property Let RefVar(ByVal Target As LongPtr, ByRef Source As Variant)
+    SetBind([_LetVar]) = [_MovV]
+    RefVar(Target) = Source
+End Property
+Public Property Set RefVar(ByVal Target As LongPtr, ByRef Source As Variant)
+    SetBind([_SetVar]) = [_SetV]
+    Set RefVar(Target) = Source
+End Property
+
+Public Sub CopyVar(ByVal Target As LongPtr, ByVal Source As LongPtr)
+    SetBind([_CopyVar]) = [_MovV]
+    CopyVar Target, Source
+End Sub
+
 '///////////////////////////////////////////////////////////////////////////////////////////////
 '// [Exposed Utilities] (Assorted) /////////////////////////////////////////////////////////////
 
-'// [tagVARIANT._Val] //////////////////////////
+'// [tagVARIANT.vt] ////////////////////////////
+Public Property Get VarVT(ByRef VarVar As Variant) As Integer
+    SetBind([_GetVT]) = [_Get2]
+    VarVT = VarVT(VarVar)
+End Property
+Public Property Let VarVT(ByRef VarVar As Variant, ByVal vt As Integer)
+    SetBind([_LetVT]) = [_Put2]
+    VarVT(VarVar) = vt
+End Property
+
+Public Sub CopyVT(ByRef Target As Variant, ByRef Source As Variant)
+    SetBind([_CopyVT]) = [_Mov2]
+    CopyVT Target, Source
+End Sub
+
+'// [tagVARIANT.val] ///////////////////////////
 Public Property Get VarVal(ByRef VarVar As Variant) As LongPtr
-    VarVal = RefPtr(VarPtr(VarVar) + o8h)
+    SetBind([_GetVal]) = [_GetT]
+    VarVal = VarVal(VarVar)
 End Property
-Public Property Let VarVal(ByRef VarVar As Variant, ByVal Val As LongPtr)
-    RefPtr(VarPtr(VarVar) + o8h) = Val
+Public Property Let VarVal(ByRef VarVar As Variant, ByVal val As LongPtr)
+    SetBind([_LetVal]) = [_PutT]
+    VarVal(VarVar) = val
 End Property
+
+Public Sub CopyVal(ByRef Target As Variant, ByRef Source As Variant)
+    SetBind([_CopyVal]) = [_MovT]
+    CopyVal Target, Source
+End Sub
 
 '// `AddressOf` operator only accepts Sub/Function/Property_Get identifiers.
 '//  Property_Let/Property_Set (propput[ref]) identifier operands are invalid.
