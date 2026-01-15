@@ -57,7 +57,7 @@ End Type
 
 Private Enum ImportTableIndex: [_SetBind]
 : [_GetP]:    [_PutP]:    [_MovP] '// Provides identifiers for ImportTable indices
-: [_Get1]:    [_Put1]:    [_Mov1] '// by matching the call-order in BuildModule().
+: [_Get1]:    [_Put1]:    [_Mov1] '// by matching the call-order in SetBind().
 : [_Get2]:    [_Put2]:    [_Mov2] '//
 : [_Get4]:    [_Put4]:    [_Mov4] '// Syntactic Sugar. Could just use literals.
 : [_Get8]:    [_Put8]:    [_Mov8]
@@ -76,20 +76,22 @@ Private Enum ImportTableIndex: [_SetBind]
 : [_GetVal]:  [_LetVal]:  [_CopyVal]
 End Enum
 
-Private IsBuilt As Boolean, IsBuilding As Boolean
+Private IsBuilding As Boolean
 Private RebindArgs As RebindArgs
 
 '// [Helpers] //////////////////////////////////
 Private Property Let SetBind(ByVal Index_Called As ImportTableIndex, Optional ByRef Target As Variant, Optional ByRef Source As Variant, ByVal Index_Actual As ImportTableIndex)
     Dim U As tagVARIANT, H() As HalfPtr
-    
+
   Const A = NullPtr, AA = A, AAA = A, AAAA = A, L As Long = [_SetBind]
   Const V = NullVar, VV = V, VVV = V, VVVV = V, VVVVV = V
-  
+
+ Static IsBuilt As Boolean
+ 
     If IsBuilt Then '// Most of this is for compatibility with "Compile On Demand" / "Background Compile"
     ElseIf IsBuilding Then Exit Property
     Else:  IsBuilding = True: SetBind(L) = L
-    
+
         Call GetP:    Call PutP:    Call MovP
         Call Get1:    Call Put1:    Call Mov1
         Call Get2:    Call Put2:    Call Mov2
@@ -97,7 +99,7 @@ Private Property Let SetBind(ByVal Index_Called As ImportTableIndex, Optional By
         Call Get8:    Call Put8:    Call Mov8
         Call LetV:    Call SetV:    Call MovV(U, U)
         Call GetU(U): Call PutU(U): Call MovU(U, U)
-    
+
         RefPtr(AAA) = RefPtr(AAAA): Call CopyPtr(A, A)
         RefByte(AA) = RefByte(AAA): Call Copy1(AAA, A)
         RefInt(AAA) = RefInt(AAAA): Call Copy2(AAA, A)
@@ -105,34 +107,40 @@ Private Property Let SetBind(ByVal Index_Called As ImportTableIndex, Optional By
         RefCur(AAA) = RefCur(AAAA): Call Copy8(AAA, A)
         RefVar(AAA) = RefVar(AAAA): Call CopyVar(A, A)
         Set RefVar(A) = Nothing
-    
+
         VarVT(VVVV) = VarVT(VVVVV): Call CopyVT(VV, V)
         VarVal(VVV) = VarVal(VVVV): Call CopyVal(V, V)
-    
+
         Call VarPtr(AA): HighPtr(H) = A
-        Call Rebind: Call Rebind_CopyPtr: Call Rebind_GetPtr
+        Call Rebind: Call EnsureBindPtr
         Call UnWrapCallBack: Call EpiModule: Call ImportTable
         Call GetBind(L)
-    
+
         IsBuilt = True: IsBuilding = False
-        
-        Rebind_GetPtr
-        Rebind_CopyPtr
     End If
     
+    EnsureBindPtr
     CopyPtr GetBind(Index_Called), GetBind(Index_Actual)
-    
+
+ #If Win64 Then '// Can't write to ByRef VT_I8 Variant, so make it VT_CY.
+    Select Case Index_Called: Case [_GetPtr], [_GetVal]
+        With U: Dim Here As StackMemory
+            HighPtr(Here.Bytes) = VarPtr(Target): .vt = &H4006
+        End With
+    End Select
+ #End If
+
     Select Case Index_Called
-        Case [_GetPtr]:  Source = RefPtr(Target):  Case [_LetPtr]:   RefPtr(Target) = Source: Case [_CopyPtr]: CopyPtr Target, Source
-        Case [_GetByte]: Source = RefByte(Target): Case [_LetByte]: RefByte(Target) = Source: Case [_Copy1]:     Copy1 Target, Source
-        Case [_GetInt]:  Source = RefInt(Target):  Case [_LetInt]:   RefInt(Target) = Source: Case [_Copy2]:     Copy2 Target, Source
-        Case [_GetLng]:  Source = RefLng(Target):  Case [_LetLng]:   RefLng(Target) = Source: Case [_Copy4]:     Copy4 Target, Source
-        Case [_GetCur]:  Source = RefCur(Target):  Case [_LetCur]:   RefCur(Target) = Source: Case [_Copy8]:     Copy8 Target, Source
-        Case [_GetVar]:  Source = RefVar(Target):  Case [_LetVar]:   RefVar(Target) = Source: Case [_CopyVar]: CopyVar Target, Source
+        Case [_GetPtr]:  Target = RefPtr(Source):  Case [_LetPtr]:   RefPtr(Target) = Source: Case [_CopyPtr]: CopyPtr Target, Source
+        Case [_GetByte]: Target = RefByte(Source): Case [_LetByte]: RefByte(Target) = Source: Case [_Copy1]:     Copy1 Target, Source
+        Case [_GetInt]:  Target = RefInt(Source):  Case [_LetInt]:   RefInt(Target) = Source: Case [_Copy2]:     Copy2 Target, Source
+        Case [_GetLng]:  Target = RefLng(Source):  Case [_LetLng]:   RefLng(Target) = Source: Case [_Copy4]:     Copy4 Target, Source
+        Case [_GetCur]:  Target = RefCur(Source):  Case [_LetCur]:   RefCur(Target) = Source: Case [_Copy8]:     Copy8 Target, Source
+        Case [_GetVar]:  Target = RefVar(Source):  Case [_LetVar]:   RefVar(Target) = Source: Case [_CopyVar]: CopyVar Target, Source
         Case [_SetVar]: Set RefVar(Target) = Source
-        
-        Case [_GetVT]:   Source = VarVT(Target):   Case [_LetVT]:     VarVT(Target) = Source: Case [_CopyVT]:   CopyVT Target, Source
-        Case [_GetVal]:  Source = VarVal(Target):  Case [_LetVal]:   VarVal(Target) = Source: Case [_CopyVal]: CopyVal Target, Source
+
+        Case [_GetVT]:   Target = VarVT(Source):   Case [_LetVT]:     VarVT(Target) = Source: Case [_CopyVT]:   CopyVT Target, Source
+        Case [_GetVal]:  Target = VarVal(Source):  Case [_LetVal]:   VarVal(Target) = Source: Case [_CopyVal]: CopyVal Target, Source
     End Select
 End Property
 
@@ -164,12 +172,9 @@ End Function
 '///////////////////////////////////////////////////////////////////////////////////////////////
 '// [Init] /////////////////////////////////////////////////////////////////////////////////////
 
-Private Sub Rebind_GetPtr()
+Private Sub EnsureBindPtr()
     If IsBuilding Then Exit Sub
     Rebind NullPtr, AddressOf RefPtr, AddressOf GetP
-End Sub
-Private Sub Rebind_CopyPtr()
-    If IsBuilding Then Exit Sub
     Rebind NullPtr, AddressOf CopyPtr, AddressOf MovP
 End Sub
 
@@ -286,8 +291,8 @@ End Sub
 '// ---------- [3. Return Result] //////////////////////////////////////////////////////////////
 
 '// [Pointer] //////////////////////////////////
-Public Property Get RefPtr(ByVal Target As LongPtr) As LongPtr: Dim Result As Variant
-    If IsBuilding Then Exit Property Else SetBind([_GetPtr], (Target), Result) = [_GetP]: RefPtr = Result
+Public Property Get RefPtr(ByVal Target As LongPtr) As LongPtr
+    If IsBuilding Then Exit Property Else SetBind([_GetPtr], RefPtr, (Target)) = [_GetP]
 End Property
 Public Property Let RefPtr(ByVal Target As LongPtr, ByVal Source As LongPtr)
     If IsBuilding Then Exit Property Else SetBind([_LetPtr], (Target), (Source)) = [_PutP]
@@ -299,7 +304,7 @@ End Sub
 
 '// [Byte] /////////////////////////////////////
 Public Property Get RefByte(ByVal Target As LongPtr) As Byte
-    If IsBuilding Then Exit Property Else SetBind([_GetByte], (Target), RefByte) = [_Get1]
+    If IsBuilding Then Exit Property Else SetBind([_GetByte], RefByte, (Target)) = [_Get1]
 End Property
 Public Property Let RefByte(ByVal Target As LongPtr, ByVal Source As Byte)
     If IsBuilding Then Exit Property Else SetBind([_LetByte], (Target), (Source)) = [_Put1]
@@ -311,7 +316,7 @@ End Sub
 
 '// [Integer] //////////////////////////////////
 Public Property Get RefInt(ByVal Target As LongPtr) As Integer
-    If IsBuilding Then Exit Property Else SetBind([_GetInt], (Target), RefInt) = [_Get2]
+    If IsBuilding Then Exit Property Else SetBind([_GetInt], RefInt, (Target)) = [_Get2]
 End Property
 Public Property Let RefInt(ByVal Target As LongPtr, ByVal Source As Integer)
     If IsBuilding Then Exit Property Else SetBind([_LetInt], (Target), (Source)) = [_Put2]
@@ -323,7 +328,7 @@ End Sub
 
 '// [Long] /////////////////////////////////////
 Public Property Get RefLng(ByVal Target As LongPtr) As Long
-    If IsBuilding Then Exit Property Else SetBind([_GetLng], (Target), RefLng) = [_Get4]
+    If IsBuilding Then Exit Property Else SetBind([_GetLng], RefLng, (Target)) = [_Get4]
 End Property
 Public Property Let RefLng(ByVal Target As LongPtr, ByVal Source As Long)
     If IsBuilding Then Exit Property Else SetBind([_LetLng], (Target), (Source)) = [_Put4]
@@ -335,7 +340,7 @@ End Sub
 
 '// [Currency] /////////////////////////////////
 Public Property Get RefCur(ByVal Target As LongPtr) As Currency
-    If IsBuilding Then Exit Property Else SetBind([_GetCur], (Target), RefCur) = [_Get8]
+    If IsBuilding Then Exit Property Else SetBind([_GetCur], RefCur, (Target)) = [_Get8]
 End Property
 Public Property Let RefCur(ByVal Target As LongPtr, ByVal Source As Currency)
     If IsBuilding Then Exit Property Else SetBind([_LetCur], (Target), (Source)) = [_Put8]
@@ -347,7 +352,7 @@ End Sub
 
 '// [Variant] //////////////////////////////////
 Public Property Get RefVar(ByVal Target As LongPtr) As Variant
-    If IsBuilding Then Exit Property Else SetBind([_GetVar], (Target), RefVar) = [_MovV]
+    If IsBuilding Then Exit Property Else SetBind([_GetVar], RefVar, (Target)) = [_MovV]
 End Property
 Public Property Let RefVar(ByVal Target As LongPtr, ByRef Source As Variant)
     If IsBuilding Then Exit Property Else SetBind([_LetVar], (Target), Source) = [_LetV]
@@ -366,7 +371,7 @@ End Property
 
 '// [tagVARIANT.vt] ////////////////////////////
 Public Property Get VarVT(ByRef VarVar As Variant) As Integer
-    If IsBuilding Then Exit Property Else SetBind([_GetVT], VarVar, VarVT) = [_Get2]
+    If IsBuilding Then Exit Property Else SetBind([_GetVT], VarVT, VarVar) = [_Get2]
 End Property
 Public Property Let VarVT(ByRef VarVar As Variant, ByVal vt As Integer)
     If IsBuilding Then Exit Property Else SetBind([_LetVT], VarVar, (vt)) = [_Put2]
@@ -377,8 +382,8 @@ Public Sub CopyVT(ByRef Target As Variant, ByRef Source As Variant)
 End Sub
 
 '// [tagVARIANT.val] ///////////////////////////
-Public Property Get VarVal(ByRef VarVar As Variant) As LongPtr: Dim Result As Variant
-    If IsBuilding Then Exit Property Else SetBind([_GetVal], VarVar, Result) = [_GetU]: VarVal = Result
+Public Property Get VarVal(ByRef VarVar As Variant) As LongPtr
+    If IsBuilding Then Exit Property Else SetBind([_GetVal], VarVal, VarVar) = [_GetU]
 End Property
 Public Property Let VarVal(ByRef VarVar As Variant, ByVal val As LongPtr)
     If IsBuilding Then Exit Property Else SetBind([_LetVal], VarVar, (val)) = [_PutU]
