@@ -6,7 +6,7 @@ Option Explicit
 
  #If VBA7 <> 1 Then
     Private Enum LONG_PTR: [_LONG_PTR]: End Enum
-     Private Enum LongPtr:  [_LongPtr]: End Enum '// Must be Private for Enum-typed Private Property
+     Public Enum LongPtr:   [_LongPtr]: End Enum '// Must be Public for Enum-typed Public Property
     Private Const NullPtr = [_LongPtr]
  #Else
     Private Const NullPtr As LongPtr = 0
@@ -26,7 +26,9 @@ Private Const wHalfPtr As Long = cLongPtr \ 4&
 
 '// Implicit typing allows for (effectively) LongPtr-typed constants
 Private Const oLongPtr = NullPtr + cLongPtr
-Private Const oLongPtrx2 = oLongPtr + oLongPtr
+Private Const oLongPtrx2 = oLongPtr * 2
+Private Const BasePtr = NullPtr, _
+              NewBase = BasePtr + 0
 
 Private Type HalfPtr
     Bytes As String * wHalfPtr
@@ -37,7 +39,7 @@ Private Enum Offsets
     [+0xLongPtr]
 End Enum
 
-Private Type WithBlock
+Public Type WithBlock
     Offsets([+0x0] To [+0xLongPtr]) As HalfPtr
 End Type
 
@@ -62,61 +64,63 @@ Public Type IVariant:   Variant As Variant:  End Type
 
 Private CallerContextArgs As CallerContextArgs
 
-Private Function Test() As LongPtr
-    With NewByte(VarPtr(Test))
-        Debug.Print VarPtr(.Byte) = VarPtr(Test)
+Private Function test() As LongPtr
+    With NewByte(VarPtr(test))
+        Debug.Print VarPtr(.Byte) = VarPtr(test)
     End With
     
-    With NewInteger(VarPtr(Test))
-        Debug.Print VarPtr(.Integer) = VarPtr(Test)
+    With NewInteger(VarPtr(test))
+        Debug.Print VarPtr(.Integer) = VarPtr(test)
     End With
     
-    With NewBoolean(VarPtr(Test))
-        Debug.Print VarPtr(.Boolean) = VarPtr(Test)
+    With NewBoolean(VarPtr(test))
+        Debug.Print VarPtr(.Boolean) = VarPtr(test)
     End With
     
-    With NewLong(VarPtr(Test))
-        Debug.Print VarPtr(.Long) = VarPtr(Test)
+    With NewLong(VarPtr(test))
+        Debug.Print VarPtr(.Long) = VarPtr(test)
     End With
     
-    With NewSingle(VarPtr(Test))
-        Debug.Print VarPtr(.Single) = VarPtr(Test)
+    With NewSingle(VarPtr(test))
+        Debug.Print VarPtr(.Single) = VarPtr(test)
     End With
     
-    With NewLongPtr(VarPtr(Test))
-        Debug.Print VarPtr(.LongPtr) = VarPtr(Test)
+    With NewLongPtr(VarPtr(test))
+        Debug.Print VarPtr(.LongPtr) = VarPtr(test)
     End With
     
-    With NewString(VarPtr(Test))
-        Debug.Print VarPtr(.String) = VarPtr(Test)
+    With NewString(VarPtr(test))
+        Debug.Print VarPtr(.String) = VarPtr(test)
     End With
     
-    With NewObject(VarPtr(Test))
-        Debug.Print VarPtr(.Object) = VarPtr(Test)
+    With NewObject(VarPtr(test))
+        Debug.Print VarPtr(.Object) = VarPtr(test)
     End With
     
-    With NewLongLong(VarPtr(Test))
-        Debug.Print VarPtr(.LongLong) = VarPtr(Test)
+    With NewLongLong(VarPtr(test))
+        Debug.Print VarPtr(.LongLong) = VarPtr(test)
     End With
     
-    With NewDouble(VarPtr(Test))
-        Debug.Print VarPtr(.Double) = VarPtr(Test)
+    With NewDouble(VarPtr(test))
+        Debug.Print VarPtr(.Double) = VarPtr(test)
     End With
     
-    With NewCurrency(VarPtr(Test))
-        Debug.Print VarPtr(.Currency) = VarPtr(Test)
+    With NewCurrency(VarPtr(test))
+        Debug.Print VarPtr(.Currency) = VarPtr(test)
     End With
     
-    With NewDate(VarPtr(Test))
-        Debug.Print VarPtr(.Date) = VarPtr(Test)
+    With NewDate(VarPtr(test))
+        Debug.Print VarPtr(.Date) = VarPtr(test)
     End With
     
-    With NewVariant(VarPtr(Test))
-        Debug.Print VarPtr(.Variant) = VarPtr(Test)
+    With NewVariant(VarPtr(test))
+        Debug.Print VarPtr(.Variant) = VarPtr(test)
     End With
     
 End Function
 
+'// [Examples] /////////////////////////////////////////////////////////////////////////////////
+'// {CallerContext} is public, so you can implement this behavior for any type by matching this template
 Public Function NewByte(ByVal This As LongPtr) As IByte
     CallerContext = This
 End Function
@@ -157,79 +161,110 @@ Public Function NewVariant(ByVal This As LongPtr) As IVariant
     CallerContext = This
 End Function
 
-Private Property Let CallerContext(Optional ByRef Context As LongPtr, Optional ByRef FrameOffset As Long, ByVal NewContext As LongPtr)
-'// 1. Gets the caller's base stack address. (FrameBase)
-'//     - The address of FrameOffset 0x0 from the perspective of the calling precedure.
-'//     - For a procedure defined in a standard module, FrameOffset 0x0 holds a pointer to the module's Module-level variables.
-'//     - For a procedure defined in a class module, FrameOffset 0x0 holds the object pointer of the executing instance.
-'//     - Parameters have a positive FrameOffset and local variables have a negative FrameOffset.
+
+'///////////////////////////////////////////////////////////////////////////////////////////////
+'// [Worker] ///////////////////////////////////////////////////////////////////////////////////
+'// 1. Gets the caller's base stack address. ({FrameBase})
+'//     - The address of frame-offset 0x0 from the perspective of the calling precedure.
+'//     - For a procedure defined in a standard module, frame-offset 0x0 holds a pointer to the module's Module-level variables.
+'//     - For a procedure defined in a class module, frame-offset 0x0 holds the object pointer of the executing instance.
+'//     - Parameters have a positive frame-offset and local variables have a negative frame-offset.
 '//
-'// 2. Get the FrameOffset argument of the caller's lblEX_FStI8 instruction
-'//     - This FrameOffset is where the caller writes the address of the callee's return value, and serves as the With-block's "context".
+'// 2. Get the {FOffset} argument of the caller's lblEX_FStI8 instruction
+'//     - This frame-offset is where the caller writes the address of the callee's return value, and serves as the With-block's "context".
 '//
 '// 3. Compute the address of the caller's With-block context
-'//     - FrameBase + FrameOffset
+'//     - {FrameBase} + {FrameOffset}
 '//
-'// 4. Write our own value (NewContext) to that address
+'// 4. Write our own value ({NewContext}) to that address
 '//
-'// 5. Increment the caller's RSI to effectively jump over [lblEX_FLdRf; lblEX_FStI8]
+'// 5. Increment the caller's RSI to effectively jump over its instruction bytes for lblEX_FLdRf; lblEX_FStI8.
 '//     - Prevents the caller from overwriting the address we just wrote
-'//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-'  Const lblEX_ImpAdCallBasicCbFrame As Long = &HFFFF& And &H520
-'  Const lblEX_ImpAdCallBasic        As Long = &HFFFF& And &H51F
-  Const lblEX_FLdRf                 As Long = &HFFFF& And &H29F
-  Const lblEX_FStI8                 As Long = &HFFFF& And &H2BB
-'  Const lblBEX_LargeBos             As Long = &HFFFF& And &H267
+Public Property Let CallerContext(Optional ByRef Context As LongPtr, Optional ByRef FrameOffset As Long, ByVal NewContext As LongPtr)
+'// [Constants] ////////////////////////////////////////////////////////////////////////////////
+  'Const lblEX_ImpAdCallBasicCbFrame As Long = &HFFFF& And &H520
+  'Const lblEX_ImpAdCallBasic        As Long = &HFFFF& And &H51F
+  'Const lblBEX_LargeBos             As Long = &HFFFF& And &H267
+
+  Const lblEX_FLdRf  As Long = &HFFFF& And &H29F, _
+        lblEX_FLdRf2 As Long = lblEX_FLdRf * &H10000
+  Const lblEX_FStI8  As Long = &HFFFF& And &H2BB
   
-  Const oEbThread = oLongPtr * 6
-  Const oExframeTOS = oLongPtrx2
-  Const oFrameBase = oLongPtr * 5
-  Const oCallerRSI = NullPtr - (oLongPtr * 32)
+  Const cFLdRf As Long = 6&
+  Const cFStI8 As Long = 6&
+
+'// [Offsets] //////////////////////////////////////////////////////////////////////////////////
+'// {o0_} - A base address; for defining offsets, symbolic only
+'// {o1_} - A first-order offset; relative to some base address {o0_}
+'// {o2_} - A second-order offset; relative to some first-order offset {o1_} ' _
+     ...
+  Const o0Err = NewBase
+  Const o0EbThread = NewBase
+  Const o0Exframe = NewBase
+  Const o0FLdRf = NewBase
   
-  Const oCbFrame = NullPtr + 2
-  Const oFLdRf = NullPtr + 0
-  Const oFStI8 = NullPtr + 6
-  Const oFOffset = NullPtr + 2
-  Const oJumpSize = NullPtr + 12
-  
+  Const o1EbThread = o0Err + oLongPtr * 6
+  Const o1ExframeTOS = o0EbThread + oLongPtr * 2
+  Const o1FrameBase = o0Exframe + oLongPtr * 5
+  Const o1CallerRSI = o1FrameBase + oLongPtr * 7, _
+        o2CallerRSI = o1CallerRSI - o1FrameBase
+
+  Const o1CbFrame = o0FLdRf - 2
+  Const o1FStI8 = o0FLdRf + cFLdRf, _
+        o2FStI8 = o1FStI8 - o1CbFrame
+  Const o1FStI8_FOffset = o1FStI8 + 2, _
+        o2FStI8_FOffset = o1FStI8_FOffset - o1FStI8
+  Const o1NextBos = o1FStI8 + cFStI8
+
+'// [Procedure] ////////////////////////////////////////////////////////////////////////////////
     Dim FrameBase As LongPtr
     
     With CallerContextArgs
         Dim This As WithBlock
         ContextOf(This) = VarPtr(NewContext) - oLongPtrx2
         
-        .pContext = ObjPtr(Err) + oEbThread
-        .pContext = Context + oExframeTOS
-        .pContext = Context '// CallerContext?
-        .pContext = Context '// New<Type>?
-        .pContext = Context '// <Caller_of_New<Type>>?
+        '// Walk down the callstack to the caller's Exframe
+        .pContext = ObjPtr(Err) + o1EbThread
+        .pContext = Context + o1ExframeTOS
+        .pContext = Context '// CallerContext         (top of stack/this procedure)
+        .pContext = Context '// New<Type>             (the callee)
+        .pContext = Context '// <Caller_of_New<Type>> (the caller)
         
-        .pContext = .pContext + oFrameBase
+        '// Get caller's base stack address
+        .pContext = .pContext + o1FrameBase
         FrameBase = Context
         
-        .pContext = .pContext - oFrameBase
-        .pContext = Context + oCallerRSI
+        '// Point this procedure's {Context} parameter at the caller's instruction pointer
+        .pContext = .pContext + o2CallerRSI
         
+        '// Point this procedure's {FrameOffset} parameter to where the caller's instruction pointer points
         .pFrameOffset = Context
         
-        If (FrameOffset And &HFFFF&) <> lblEX_FLdRf Then
-            .pFrameOffset = .pFrameOffset + oCbFrame
-            If (FrameOffset And &HFFFF&) <> lblEX_FLdRf Then Exit Property
+        '// Sanity check the caller's bytecode
+        If (FrameOffset And &HFFFF0000) = lblEX_FLdRf2 Then
+            .pFrameOffset = .pFrameOffset + o2FStI8
+        ElseIf (FrameOffset And &HFFFF&) = lblEX_FLdRf Then
+            .pFrameOffset = .pFrameOffset + o1FStI8
+        Else
+            Exit Property
         End If
         
-        .pFrameOffset = .pFrameOffset + oFStI8
-        If (FrameOffset And &HFFFF&) = lblEX_FStI8 Then Else Exit Property
-            
-        .pFrameOffset = .pFrameOffset + oFOffset
-        Context = Context + oJumpSize
+        If (FrameOffset And &HFFFF&) <> lblEX_FStI8 Then Exit Property
         
+        '// Point this procedure's FrameOffset parameter at the FStI8_FOffset value
+        .pFrameOffset = .pFrameOffset + o2FStI8_FOffset
+        
+        '// Advance the caller's instruction pointer
+        Context = Context + o1NextBos
+        
+        '// Write the With-block context
         .pContext = FrameBase + FrameOffset
         Context = NewContext
     End With
 End Property
 
-Private Property Let ContextOf(ByRef Block As WithBlock, ByVal Address As LongPtr)
+Public Property Let ContextOf(ByRef Block As WithBlock, ByVal Address As LongPtr)
     WriteValueAtOffset Address, Block.Offsets, [+0xLongPtr]
 End Property
 
